@@ -230,12 +230,16 @@ const write_playlist = async () => {
         '#EXT-X-VERSION:3',
         '#EXT-X-TARGETDURATION:5',
         `#EXT-X-MEDIA-SEQUENCE:${seq}`,
+        `#EXT-X-MAP:URI="${opts.hls_ass_init_filename}"`,
     ];
     {
         for(const segment of playlist) {
             const duration = segment.duration.toString();
             if(segment.discontinuity) {
-                buf.push('#EXT-X-DISCONTINUITY');
+                buf.push(
+                    '#EXT-X-DISCONTINUITY',
+                    `#EXT-X-MAP:URI="${opts.hls_ass_init_filename}"`,
+                );
             }
             buf.push(
                 `#EXTINF:${duration.substring(0, duration.length - 3)}.${duration.substring(duration.length - 3)}000,`,
@@ -308,7 +312,7 @@ const write_segment = async ()=>{
                 throw new Error(`invalid path of master_pl - ${mpl_dir} ${Path.resolve(pwd, playlist_name)}`);
             }
             try {
-                const line = `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="arib",NAME="ARIB",URI="${Path.resolve(pwd, playlist_name).substring(mpl_dir.length+1)}",LANGUAGE="ja"\n`;
+                const line = `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="arib",NAME="ARIB",URI="${Path.resolve(pwd, playlist_name).substring(mpl_dir.length+1)}",LANGUAGE="ja",CHARACTERISTICS="public.accessibility.describes-music-and-sound"\n`;
                 const body = await FileSystem.readFile(mpl_path);
                 if(!body.includes(line)) {
                     await FileSystem.appendFile(mpl_path, line);
