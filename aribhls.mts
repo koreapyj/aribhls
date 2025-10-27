@@ -90,6 +90,55 @@ class AssDialogue {
     }
 }
 
+class AssDialogueQueue {
+    _queue: AssDialogue[] = [];
+    _maxDuration: number = ARIB_INFINITY;
+
+    constructor({
+        maxDuration
+    }: {
+        maxDuration?: number
+    } = {}) {
+        if(maxDuration) {
+            this._maxDuration = maxDuration;
+        }
+    }
+
+    push(new_item: AssDialogue) {
+        const buf: AssDialogue[] = [];
+        for(let item;item = this._queue.shift();) {
+            if(item.attribs.Start == new_item.attribs.Start) {
+                this._queue.unshift(item);
+                break;
+            }
+            item.attribs.End = new_item.attribs.Start;
+            buf.push(item);
+        }
+        if(new_item.attribs.End != ARIB_INFINITY) {
+            if(new_item.attribs.Text) {
+                buf.push(new_item);
+            }
+        }
+        else {
+            if(new_item.attribs.Text) {
+                this._queue.push(new_item);
+            }
+        }
+        return buf;
+    }
+
+    flush() {
+        const buf = [];
+        for(let item;item = this._queue.shift();) {
+            if(item.attribs.End == ARIB_INFINITY) {
+                item.attribs.End = item.attribs.Start + this._maxDuration;
+            }
+            buf.push(item);
+        }
+        return buf;
+    }
+}
+
 const opts = getopts(process.argv.slice(2), {
     default: {
         hls_time: 2,
@@ -312,7 +361,7 @@ const write_segment = async ()=>{
                 throw new Error(`invalid path of master_pl - ${mpl_dir} ${Path.resolve(pwd, playlist_name)}`);
             }
             try {
-                const line = `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="arib",NAME="ARIB",URI="${Path.resolve(pwd, playlist_name).substring(mpl_dir.length+1)}",LANGUAGE="ja",CHARACTERISTICS="public.accessibility.describes-music-and-sound"\n`;
+                const line = `#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="arib",NAME="ARIB",URI="${Path.resolve(pwd, opts.hls_ass_init_filename).substring(mpl_dir.length+1)}",LANGUAGE="ja",CHARACTERISTICS="public.accessibility.describes-music-and-sound"\n`;
                 const body = await FileSystem.readFile(mpl_path);
                 if(!body.includes(line)) {
                     await FileSystem.appendFile(mpl_path, line);
@@ -331,6 +380,22 @@ const write_segment = async ()=>{
 };
 write_segment_to = setTimeout(write_segment, opts.hls_time * 1000);
 
-rl.on('line', line => {
+// const assqueue = new AssDialogueQueue({
+//     maxDuration: opts.hls_time * 1000
+// });
+
+// let line_to: number|NodeJS.Timeout;
+// const on_line = () => {
+//     clearTimeout(line_to);
+//     events.push(...assqueue.flush());
+//     line_to = setTimeout(on_line, opts.hls_time * 1000);
+// };
+// rl.on('line', (line: string) => {
+//     clearTimeout(line_to);
+//     events.push(...assqueue.push(new AssDialogue(line, eventFormat)));
+//     line_to = setTimeout(on_line, opts.hls_time * 1000);
+// });
+
+rl.on('line', (line: string) => {
     events.push(new AssDialogue(line, eventFormat));
 });
