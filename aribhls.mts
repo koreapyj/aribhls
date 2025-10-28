@@ -40,7 +40,7 @@ class AssDialogue {
         this.attribs = {
             ...attribs,
             Start: AssDialogue.parseTSString(attribs.Start),
-            End: AssDialogue.parseTSString(attribs.End),
+            End: attribs.End?AssDialogue.parseTSString(attribs.End):Infinity,
         } as IAssDialogueAttr;
         this.format = format;
     }
@@ -55,13 +55,12 @@ class AssDialogue {
     }
 
     offsetEnd(ms: number) {
-        if(this.attribs.End == ARIB_INFINITY) return this;
         this.attribs.End += ms;
         return this;
     }
 
     toString() {
-        return `Dialogue: ${this.attribs.Layer},${AssDialogue.toASSTSString(this.attribs.Start)},${AssDialogue.toASSTSString(this.attribs.End)},${this.attribs.Style},${this.attribs.Name},${this.attribs.MarginL},${this.attribs.MarginR},${this.attribs.MarginV},${this.attribs.Effect},${this.attribs.Text.replace(/\{\\3a&Hff&\}/g,'')}`;
+        return `Dialogue: ${this.attribs.Layer||''},${AssDialogue.toASSTSString(this.attribs.Start)},${this.attribs.End===Infinity?'':AssDialogue.toASSTSString(this.attribs.End)},${this.attribs.Style},${this.attribs.Name},${this.attribs.MarginL||''},${this.attribs.MarginR||''},${this.attribs.MarginV||''},${this.attribs.Effect},${this.attribs.Text.replace(/\{\\3a&Hff&\}/g,'')}`;
     }
 
     static from(str: string, format: string[]) {
@@ -69,6 +68,9 @@ class AssDialogue {
     }
 
     static parseTSString(str: string) {
+        if(str === '9:59:59.99') {
+            return Infinity;
+        }
         const negative = str[0] == '-';
         const [time, ms] = str.substring(negative?1:0).split('.',2);
         const [hours, minutes, seconds] = time.split(':', 3);
@@ -114,7 +116,7 @@ class AssDialogueQueue {
             item.attribs.End = new_item.attribs.Start;
             buf.push(item);
         }
-        if(new_item.attribs.End != ARIB_INFINITY) {
+        if(new_item.attribs.End != Infinity) {
             if(new_item.attribs.Text) {
                 buf.push(new_item);
             }
@@ -130,7 +132,7 @@ class AssDialogueQueue {
     flush() {
         const buf = [];
         for(let item;item = this._queue.shift();) {
-            if(item.attribs.End == ARIB_INFINITY) {
+            if(item.attribs.End == Infinity) {
                 item.attribs.End = item.attribs.Start + this._maxDuration;
             }
             buf.push(item);
@@ -232,6 +234,7 @@ const eventFormat = await (async ():Promise<string[]>=>{
                 case '#EXT-X-VERSION':
                 case '#EXT-X-MEDIA':
                 case '#EXT-X-TARGETDURATION':
+                case '#EXT-X-MAP':
                     break;
                 case '#EXT-X-DISCONTINUITY': {
                     discontinuity = true;
@@ -276,8 +279,8 @@ const eventFormat = await (async ():Promise<string[]>=>{
 const write_playlist = async () => {
     const buf = [
         '#EXTM3U',
-        '#EXT-X-VERSION:3',
-        '#EXT-X-TARGETDURATION:5',
+        '#EXT-X-VERSION:6',
+        `#EXT-X-TARGETDURATION:${opts.hls_time}`,
         `#EXT-X-MEDIA-SEQUENCE:${seq}`,
         `#EXT-X-MAP:URI="${opts.hls_ass_init_filename}"`,
     ];
@@ -310,19 +313,23 @@ const write_playlist = async () => {
     await FileSystem.rename(`${Path.resolve(pwd, playlist_name)}.tmp`, `${Path.resolve(pwd, playlist_name)}`);
 };
 
-let program_date_time = timebase;
 let write_segment_to: NodeJS.Timeout;
-let is_first = true, master_pl_written = false;
+let is_first = true;
 const write_segment = async ()=>{
     try {
         clearTimeout(write_segment_to);
 
-        const now = new Date;
-        const duration = now.getTime() - program_date_time;
+        if(events.length==0) {
+            write_segment_to = setTimeout(write_segment, opts.hls_time * 1000 - 10);
+            return;
+        }
+
+        const now = new Date(timebase + events[0].attribs.Start);
+        const duration = (events[events.length-1].attribs.Start - events[0].attribs.Start) || opts.hls_time * 1000;
 
         const name = `${now.toISOString().replace(/\..*$/,'').replace(/[-:]/g,'').replace('T','-')}.ass`;
-        const fp = await FileSystem.open(`${Path.resolve(pwd, name)}.tmp`, 'w');
-        console.log('[aribhls]', `Opening '${Path.resolve(pwd, name)}.tmp' for writing`);
+        const fp = await FileSystem.open(`${Path.resolve(pwd, name)}`, 'w');
+        console.log('[aribhls]', `Opening '${Path.resolve(pwd, name)}' for writing`);
         const stream = fp.createWriteStream();
         for(const line of eventTemplate) {
             stream.write(line);
@@ -330,13 +337,12 @@ const write_segment = async ()=>{
         }
         let event;
         while((event = events.shift()) !== undefined) {
-            stream.write(event.offset(timebase - program_date_time).toString());
+            stream.write(event.offset(timebase - now.getTime()).toString());
             stream.write("\n");
         }
 
         stream.close();
         await fp.close();
-        await FileSystem.rename(`${Path.resolve(pwd, name)}.tmp`, `${Path.resolve(pwd, name)}`);
 
         playlist.push({
             name,
@@ -344,7 +350,6 @@ const write_segment = async ()=>{
             duration,
             discontinuity: is_first,
         });
-        program_date_time = now.getTime();
         const rmq: string[] = [];
         for(let i=0;i<playlist.length-opts.hls_list_size;i++) {
             const row = playlist.shift();
@@ -372,13 +377,13 @@ const write_segment = async ()=>{
         try {
             await Promise.all(rmq.map(x=>FileSystem.rm(x)));
         } catch {}
-        write_segment_to = setTimeout(write_segment, opts.hls_time * 1000);
+        write_segment_to = setTimeout(write_segment, opts.hls_time * 1000 - 10);
     } catch(ex) {
         console.error('[aribhls]', ex);
         process.exit(-1);
     }
 };
-write_segment_to = setTimeout(write_segment, opts.hls_time * 1000);
+write_segment_to = setTimeout(write_segment, opts.hls_time * 1000 - 10);
 
 // const assqueue = new AssDialogueQueue({
 //     maxDuration: opts.hls_time * 1000
@@ -396,6 +401,30 @@ write_segment_to = setTimeout(write_segment, opts.hls_time * 1000);
 //     line_to = setTimeout(on_line, opts.hls_time * 1000);
 // });
 
+let last_time = {
+    Start: 0,
+    End: 0,
+};
 rl.on('line', (line: string) => {
-    events.push(new AssDialogue(line, eventFormat));
+    const row = new AssDialogue(line, eventFormat);
+
+    /* ffmpeg assenc 10 hours bug workaround */
+    if(last_time.Start > row.attribs.Start) {
+        row.attribs.Start += 10 * 60 * 60 * 1000;
+    }
+    if(last_time.End > row.attribs.End) {
+        row.attribs.End += 10 * 60 * 60 * 1000;
+    }
+
+    /* remove 'Default' */
+    if(row.attribs.Style == 'Default') {
+        row.attribs.Style = '';
+    }
+
+    events.push(row);
+
+    last_time.Start = row.attribs.Start;
+    if(row.attribs.End != Infinity) {
+        last_time.End = row.attribs.End;
+    }
 });
