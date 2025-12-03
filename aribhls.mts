@@ -171,6 +171,7 @@ const sighandler: NodeJS.SignalsListener = sig => {
 }
 process.on('SIGINT', sighandler);
 process.on('SIGTERM', sighandler);
+rl.on('close', ()=>process.exit(0));
 
 const eventTemplate: string[] = [];
 const buf: string[] = [];
@@ -282,6 +283,7 @@ const write_playlist = async () => {
         '#EXT-X-VERSION:6',
         `#EXT-X-TARGETDURATION:${opts.hls_time}`,
         `#EXT-X-MEDIA-SEQUENCE:${seq}`,
+        `#EXT-X-INDEPENDENT-SEGMENTS`,
         `#EXT-X-MAP:URI="${opts.hls_ass_init_filename}"`,
     ];
     {
@@ -422,6 +424,8 @@ rl.on('line', (line: string) => {
     }
 
     events.push(row);
+    clearTimeout(write_segment_to);
+    write_segment_to = setTimeout(write_segment, 500);
 
     last_time.Start = row.attribs.Start;
     if(row.attribs.End != Infinity) {
